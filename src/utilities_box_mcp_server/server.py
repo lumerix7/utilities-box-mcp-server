@@ -291,7 +291,8 @@ async def ping(destination: Annotated[str, Field(description="The DNS name or IP
     except FileNotFoundError as e:
         raise FileNotFoundError(f"Ping command not found on this system: {e}")
     except TimeoutExpired as e:
-        raise TimeoutError(f"Ping to {destination} timed out after {timeout} seconds: {e}")
+        stderr.write(f"Ping to {destination} timed out after {timeout} seconds: {e}.\n")
+        raise TimeoutError(f"Ping to {destination} timed out after {timeout} seconds")
 
 
 @mcp.tool(name="check_connectivity",
@@ -405,7 +406,8 @@ async def check_connectivity(
     except FileNotFoundError as e:
         raise FileNotFoundError(f"Curl command not found on this system: {e}")
     except TimeoutExpired as e:
-        raise TimeoutError(f"Connection to {destination} timed out after {timeout} seconds: {e}")
+        stderr.write(f"Connection to {destination} timed out after {timeout} seconds: {e}.\n")
+        raise TimeoutError(f"Connection to {destination} timed out after {timeout} seconds")
 
 
 # Other tools.
