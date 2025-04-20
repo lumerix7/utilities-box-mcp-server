@@ -218,8 +218,8 @@ async def get_system_stats() -> Annotated[dict, Field(description="A dictionary 
 @mcp.tool(name="ping",
           description="Ping a DNS name or IP address with the optional timeout and count. Results are details of the ping command.")
 async def ping(destination: Annotated[str, Field(description="The DNS name or IP address to ping, required.")],
-               timeout: Annotated[int | float, Field(description="The total timeout for the ping in seconds, optional, "
-                                                                 "defaults to 15 seconds.")] = 15.0,
+               timeout: Annotated[float, Field(description="The total timeout for the ping in seconds, optional, "
+                                                           "defaults to 15 seconds.")] = 15.0,
                count: Annotated[int, Field(description="The number of pings to send, optional, defaults to 3.")] = 3,
                ) -> Annotated[str, Field(description="The details of the ping command.")]:
     """Ping a DNS name or IP address with the optional timeout and count.
@@ -274,7 +274,7 @@ async def ping(destination: Annotated[str, Field(description="The DNS name or IP
             timeout=timeout + 1.0,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True, # decode bytes to str using locale encoding
+            text=True,  # decode bytes to str using locale encoding
             check=False
         )
 
@@ -305,7 +305,7 @@ async def check_connectivity(
                               "or URL.")
         ],
         timeout: Annotated[
-            int | float,
+            float,
             Field(description="The timeout for the telnet in seconds, optional, defaults to 15 seconds.")
         ] = 15.0,
         proxy_enabled: Annotated[
@@ -329,7 +329,7 @@ async def check_connectivity(
 
     Args:
         :param destination: (str):     The destination to check connectivity to, required, can be a hostname, IP address, or URL.
-        :param timeout: (int | float): The timeout for the telnet in seconds, optional, defaults to 15 seconds.
+        :param timeout: (float):       The timeout for the telnet in seconds, optional, defaults to 15 seconds.
         :param proxy_enabled: (bool):  Whether to enable the proxy settings, optional, defaults to True.
         :param proxy: (str):           The proxy server to use, optional, defaults to system proxy settings.
         :param proxy_username: (str):  The username for the proxy server, optional, defaults to system proxy settings.
@@ -387,7 +387,7 @@ async def check_connectivity(
             timeout=timeout + 1.0,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True, # decode bytes to str using locale encoding
+            text=True,  # decode bytes to str using locale encoding
             check=False
         )
 
@@ -417,7 +417,7 @@ async def check_connectivity(
 @mcp.tool(name="sleep", description="Sleep for a specified amount of time.")
 async def sleep(
         time_value: Annotated[
-            int | float,
+            float,
             Field(description="The time value to sleep for, in 'time_unit' units, required.")
         ],
         time_unit: Annotated[
@@ -428,8 +428,8 @@ async def sleep(
     """Sleeps for a specified amount of time.
 
     Args:
-        time_value (int | float): The time value to sleep for, in 'time_unit' units, required.
-        time_unit (str):          The unit of time to sleep for, optional, defaults to seconds. Can be microseconds, milliseconds, seconds, minutes, hours, days or weeks.
+        time_value (float): The time value to sleep for, in 'time_unit' units, required.
+        time_unit (str):    The unit of time to sleep for, optional, defaults to seconds. Can be microseconds, milliseconds, seconds, minutes, hours, days or weeks.
 
     Returns:
         Message(str): A message indicating that the server has slept for the specified duration.
@@ -536,8 +536,8 @@ def generate_uuid(
         ValueError: If the count is not a positive integer or if the version is not 1, 3, 4, or 5 or if the namespace or name is not provided for versions 3 and 5.
     """
 
-    if not isinstance(count, int) or count < 1:
-        raise ValueError("Count must be a positive integer")
+    if not isinstance(count, int) or count < 1 or count > 1000:
+        raise ValueError("Count must be a positive integer between 1 and 1000")
 
     import uuid
 

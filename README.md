@@ -215,8 +215,8 @@ See:
    Sleep for a specified amount of time.
 
    Args:
-       time_value (int | float): The time value to sleep for, in 'time_unit' units, required.
-       time_unit (str):          The unit of time to sleep for, optional, defaults to seconds. Can be microseconds, milliseconds, seconds, minutes, hours, days or weeks.
+       time_value (float): The time value to sleep for, in 'time_unit' units, required.
+       time_unit (str):    The unit of time to sleep for, optional, defaults to seconds. Can be microseconds, milliseconds, seconds, minutes, hours, days or weeks.
 
    Returns:
        Message(str): A message indicating that the server has slept for the specified duration.
@@ -224,8 +224,6 @@ See:
    Raises:
        ValueError: If time_value is not positive or if an invalid time unit is provided.
    ```
-
-
 
 3. `generate_uuid`
 
