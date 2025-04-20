@@ -274,15 +274,16 @@ async def ping(destination: Annotated[str, Field(description="The DNS name or IP
             timeout=timeout + 1.0,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True, # decode bytes to str using locale encoding
             check=False
         )
 
         # Check if the ping command was successful
         if completed.returncode != 0:
             raise RuntimeError(f"Error while pinging {destination} (code {completed.returncode}):\n"
-                               f"{completed.stderr.decode('utf-8').strip() if completed.stderr else 'No error message'}")
+                               f"{completed.stderr.strip() if completed.stderr else 'No error message'}")
 
-        result = completed.stdout.decode('utf-8').strip() if completed.stdout else None
+        result = completed.stdout.strip() if completed.stdout else None
         if not result:
             raise RuntimeError(f"No result from ping command for {destination}")
 
@@ -386,16 +387,17 @@ async def check_connectivity(
             timeout=timeout + 1.0,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True, # decode bytes to str using locale encoding
             check=False
         )
 
         # Check if the curl command was successful
-        error = completed.stderr.decode('utf-8').strip() if completed.stderr else None
+        error = completed.stderr.strip() if completed.stderr else None
         if completed.returncode in (7, 28):
             raise RuntimeError(f"Error while checking connectivity to {destination} (code {completed.returncode}):\n"
                                f"{error if error else 'No error message'}")
 
-        result = completed.stdout.decode('utf-8').strip() if completed.stdout else None
+        result = completed.stdout.strip() if completed.stdout else None
 
         return (
             f"Connectivity to {destination} is successful:\n"
