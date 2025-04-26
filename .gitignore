@@ -12,5 +12,6 @@ wheels/
 .python-version
 uv.lock
 _version.py
+*.log
 .idea/
 *.swp

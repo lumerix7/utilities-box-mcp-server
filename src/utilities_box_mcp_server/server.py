@@ -18,21 +18,21 @@ mcp = FastMCP("Utilities Box")
 # Task and time management tools.
 
 @mcp.tool(name="get_current_time",
-          description="Get current time with the specified format(optional) and timezone nam(optional), defaults to local timezone and ISO format. "
+          description="Get current time with the specified timezone name(optional) and format(optional), defaults to local timezone and %Y-%m-%d %H:%M:%S. "
                       "Returns the current time in the specified format with timezone name and offset if available.")
 def get_current_time(
         timezone_name: Annotated[str, Field(
             description="The timezone name to use (e.g., 'Asia/Shanghai', 'America/San_Francisco'), optional. Defaults to local timezone.")] = None,
         time_format: Annotated[str, Field(
-            description="The format of the current time, optional. Defaults to ISO format, i.e. %Y-%m-%dT%H:%M:%S%z.")] = "%Y-%m-%dT%H:%M:%S%z",
+            description="The format of the current time, optional. Defaults to %Y-%m-%d %H:%M:%S.")] = "%Y-%m-%d %H:%M:%S",
 ) -> Annotated[
     GetCurrentTimeResult, Field(description="The current time in the specified format with timezone name and offset.")]:
-    """Retrieves current time with the specified format(optional) and timezone name(optional), defaults to local timezone and ISO format.
+    """Get current time with the specified timezone name(optional) and format(optional), defaults to local timezone and %Y-%m-%d %H:%M:%S.
     Returns the current time in the specified format with timezone name and offset if available.
 
     Args:
-        timezone_name (str): The timezone name to use, optional. Defaults to local timezone.
-        time_format (str):   The format of the current time, optional. Defaults to ISO format, i.e. %Y-%m-%dT%H:%M:%S%z.
+        timezone_name (str): The timezone name to use (e.g., 'Asia/Shanghai', 'America/San_Francisco'), optional. Defaults to local timezone.
+        time_format (str):   The format of the current time, optional. Defaults to %Y-%m-%d %H:%M:%S.
 
     Returns:
         Current time(GetCurrentTimeResult): The current time in the specified format with timezone name and offset if available.
@@ -107,7 +107,7 @@ def calc_time_diff(
         start_time: Annotated[str, Field(description="The start time in the specified format, required.")],
         end_time: Annotated[str, Field(description="The end time in the specified format, required.")],
         time_format: Annotated[str, Field(
-            description="The format of the time, optional. Defaults to ISO format, i.e. %Y-%m-%dT%H:%M:%S%z.")] = "%Y-%m-%dT%H:%M:%S%z",
+            description="The format of the time, optional. Defaults to %Y-%m-%d %H:%M:%S.")] = "%Y-%m-%d %H:%M:%S",
         diff_unit: Annotated[str, Field(
             description="The unit of time to return the difference in, optional, defaults to seconds. Can be microseconds, milliseconds, seconds, minutes, hours, days or weeks.")] = "seconds",
 ) -> Annotated[float, Field(description="The difference between the two times in the specified unit.")]:
@@ -116,7 +116,7 @@ def calc_time_diff(
     Args:
         start_time (str):   The start time in the specified format, required.
         end_time (str):     The end time in the specified format, required.
-        time_format (str):  The format of the time, optional. Defaults to ISO format, i.e. %Y-%m-%dT%H:%M:%S%z.
+        time_format (str):  The format of the time, optional. Defaults to %Y-%m-%d %H:%M:%S.
         diff_unit (str):    The unit of time to return the difference in, optional, defaults to seconds. Can be microseconds, milliseconds, seconds, minutes, hours, days or weeks.
 
     Returns:
@@ -280,7 +280,7 @@ async def ping(destination: Annotated[str, Field(description="The DNS name or IP
 
         # Check if the ping command was successful
         if completed.returncode != 0:
-            raise RuntimeError(f"Error while pinging {destination} (code {completed.returncode}):\n"
+            raise RuntimeError(f"Error pinging {destination} (code {completed.returncode}):\n"
                                f"{completed.stderr.strip() if completed.stderr else 'No error message'}")
 
         result = completed.stdout.strip() if completed.stdout else None
@@ -394,7 +394,7 @@ async def check_connectivity(
         # Check if the curl command was successful
         error = completed.stderr.strip() if completed.stderr else None
         if completed.returncode in (7, 28):
-            raise RuntimeError(f"Error while checking connectivity to {destination} (code {completed.returncode}):\n"
+            raise RuntimeError(f"Error checking connectivity to {destination} (code {completed.returncode}):\n"
                                f"{error if error else 'No error message'}")
 
         result = completed.stdout.strip() if completed.stdout else None

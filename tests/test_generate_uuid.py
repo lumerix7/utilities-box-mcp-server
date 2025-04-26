@@ -3,7 +3,7 @@ import sys
 import unittest
 
 # Insert src root directory to sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/src")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from utilities_box_mcp_server.server import generate_uuid
 from utilities_box_mcp_server.schema import GenerateUUIDResult

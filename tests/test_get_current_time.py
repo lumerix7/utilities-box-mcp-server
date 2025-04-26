@@ -1,12 +1,12 @@
 import os
 import sys
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 
 import tzlocal
 
 # Insert src root directory to sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/src")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from utilities_box_mcp_server.server import get_current_time, GetCurrentTimeResult
 
@@ -21,7 +21,7 @@ class TestGetCurrentTime(unittest.TestCase):
         print(result)
 
         self.assertIsInstance(result, GetCurrentTimeResult)
-        self.assertRegex(result.datetime, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
+        self.assertRegex(result.datetime, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
         self.assertEqual(result.tz_name, str(local_tz))
         self.assertIsInstance(result.tz_offset, int)
         self.assertEqual(result.tz_offset, local_utcoffset)
@@ -31,7 +31,7 @@ class TestGetCurrentTime(unittest.TestCase):
         now = datetime.now(local_tz)
         local_utcoffset = now.utcoffset().total_seconds()
 
-        result = get_current_time(str(local_tz))
+        result = get_current_time(timezone_name=str(local_tz), time_format="%Y-%m-%dT%H:%M:%S%z")
         print(result)
 
         self.assertIsInstance(result, GetCurrentTimeResult)
@@ -42,7 +42,7 @@ class TestGetCurrentTime(unittest.TestCase):
 
     def test_get_current_time_with_different_timezone(self):
         # Test with a different timezone
-        result = get_current_time("America/New_York")
+        result = get_current_time(timezone_name="America/New_York", time_format="%Y-%m-%dT%H:%M:%S%z")
         print(result)
         self.assertIsInstance(result, GetCurrentTimeResult)
         self.assertRegex(result.datetime, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
