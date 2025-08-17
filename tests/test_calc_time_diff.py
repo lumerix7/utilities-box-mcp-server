@@ -2,10 +2,9 @@ import os
 import sys
 import unittest
 
-# Insert src root directory to sys.path
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utilities_box_mcp_server.server import calc_time_diff
+from src.utilities_box_mcp_server.tools import calc_time_diff
 
 
 class TestCalcTimeDiff(unittest.TestCase):

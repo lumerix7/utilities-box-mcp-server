@@ -20,8 +20,8 @@ name = "utilities-box-mcp-server"
 # Dependencies and requirements
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.4.0",
-    "fastmcp>=0.4.1",
+    "mcp>=1.13.0",
+    #"fastmcp>=0.4.1",
     "pydantic>=2.0",
     "typing>=3.7.4.3",
     "numexpr>=2.9.0",
@@ -51,7 +51,8 @@ classifiers = [
 ]
 
 # Optional dependencies
-#[project.optional-dependencies]
+[project.optional-dependencies]
+test = ["pytest>=8.4"]
 
 # Creating executable scripts
 [project.scripts]

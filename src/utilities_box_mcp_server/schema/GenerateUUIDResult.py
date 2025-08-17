@@ -4,10 +4,6 @@ from pydantic import Field, BaseModel
 
 
 class GenerateUUIDResult(BaseModel):
-    """Generate UUID result.
+    """Result of UUIDs generation."""
 
-    Properties:
-        - uuids: The generated UUIDs.
-    """
-
-    uuids: Annotated[list[str], Field(description="The generated UUIDs.")]
+    uuids: Annotated[list[str], Field(description="Generated UUIDs.")]

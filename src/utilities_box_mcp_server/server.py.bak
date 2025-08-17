@@ -1,0 +1,868 @@
+# server.py
+
+import os
+import sys
+import time
+from sys import stderr
+from typing import Annotated
+
+from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
+from .logger import get_logger
+from .schema import ReadLinesResult, GetCurrentTimeResult, GenerateUUIDResult
+
+mcp = FastMCP("Utilities Box")
+log = get_logger()
+
+
+# Task and time management tools.
+
+@mcp.tool(name="calc_time_diff", description="Calculates the difference between two times in the specified format.")
+def calc_time_diff(
+        start_time: Annotated[str, Field(description="Start time in the specified format, required.")],
+        end_time: Annotated[str, Field(description="End time in the specified format, required.")],
+        time_format: Annotated[str, Field(
+            description="Format of the time, optional. Defaults to %Y-%m-%d %H:%M:%S.")] = "%Y-%m-%d %H:%M:%S",
+        diff_unit: Annotated[str, Field(
+            description="Unit of time to return the difference in, optional, defaults to seconds. Can be microseconds, milliseconds, seconds, minutes, hours, days or weeks.")] = "seconds",
+) -> Annotated[float, Field(description="Difference between the two times in the specified unit.")]:
+    """Calculates the difference between two times in the specified format.
+
+    Raises:
+        ValueError: If the time format is invalid, or if an invalid unit is provided.
+    """
+
+    # Dictionary of conversion factors to convert any time unit to seconds
+    conversion_factors = {
+        "microseconds": 0.000001,
+        "milliseconds": 0.001,
+        "seconds": 1,
+        "minutes": 60,
+        "hours": 3600,
+        "days": 86400,
+        "weeks": 604800,
+    }
+
+    if not isinstance(time_format, str):
+        log.error("Time format must be a string.")
+        raise ValueError("Time format must be a string")
+
+    if diff_unit not in conversion_factors:
+        valid_units = ", ".join(f'"{unit}"' for unit in conversion_factors.keys())
+        log.error(f"Invalid unit: {diff_unit}. Please use one of: {valid_units}.")
+        raise ValueError(f"Invalid unit: {diff_unit}. Please use one of: {valid_units}")
+
+    from datetime import datetime
+
+    try:
+        start_dt = datetime.strptime(start_time, time_format)
+        end_dt = datetime.strptime(end_time, time_format)
+    except ValueError as e:
+        import traceback
+        log.error(f"Error parsing date/time: {e}:\n{traceback.format_exc()}")
+        raise ValueError(f"Error parsing date/time: {e}")
+
+    delta = end_dt - start_dt
+
+    # Convert the difference to seconds based on the specified unit
+    return delta.total_seconds() / conversion_factors[diff_unit]
+
+
+@mcp.tool(name="get_current_time",
+          description="Gets current time with the specified timezone name(optional) and format(optional), defaults to local timezone and %Y-%m-%d %H:%M:%S. "
+                      "Returns the current time in the specified format with timezone name and offset if available.")
+def get_current_time(
+        timezone_name: Annotated[str, Field(
+            description="Timezone name to use (e.g., 'Asia/Shanghai', 'America/San_Francisco'), optional. Defaults to local timezone.")] = None,
+        time_format: Annotated[str, Field(
+            description="Format of the current time, optional. Defaults to %Y-%m-%d %H:%M:%S.")] = "%Y-%m-%d %H:%M:%S",
+) -> Annotated[
+    GetCurrentTimeResult, Field(description="Current time in the specified format with timezone name and offset.")]:
+    """Get current time with the specified timezone name(optional) and format(optional), defaults to local timezone and %Y-%m-%d %H:%M:%S.
+    Returns the current time in the specified format with timezone name and offset if available.
+
+    Raises:
+        ValueError: If the timezone name is invalid, or if the format is invalid.
+    """
+
+    if timezone_name is not None and not isinstance(timezone_name, str):
+        log.error("Timezone name must be a string.")
+        raise ValueError("Timezone name must be a string")
+
+    if not isinstance(time_format, str):
+        log.error("Format must be a string.")
+        raise ValueError("Format must be a string")
+
+    from datetime import datetime
+    import tzlocal
+
+    local_tz = tzlocal.get_localzone()
+
+    # If a timezone name is provided, and it is not the local timezone, convert the current time to that timezone
+    if timezone_name:
+        try:
+            if local_tz is None:
+                log.error("Local timezone is not available.")
+                raise ValueError("Local timezone is not available")
+
+            # Compare the timezone name with the local timezone
+            if timezone_name != str(local_tz):
+                from zoneinfo import ZoneInfo
+
+                # Convert the current time to the specified timezone
+                target_timezone = ZoneInfo(timezone_name)
+
+                now = datetime.now(local_tz).astimezone(target_timezone)
+                utcoffset = now.utcoffset()
+
+                return GetCurrentTimeResult(
+                    datetime=now.strftime(time_format),
+                    tz_name=timezone_name,
+                    tz_offset=int(utcoffset.total_seconds()) if utcoffset is not None else None
+                )
+
+        except Exception as e:
+            import traceback
+            log.error(f"Error getting current time in timezone '{timezone_name}': {e}:\n{traceback.format_exc()}")
+            raise ValueError(f"Error getting current time in timezone '{timezone_name}': {e}")
+
+    now = datetime.now(local_tz)
+    local_utcoffset = now.utcoffset()
+
+    return GetCurrentTimeResult(
+        datetime=now.strftime(time_format),
+        tz_name=str(local_tz) if local_tz else None,
+        tz_offset=int(local_utcoffset.total_seconds()) if local_utcoffset else None
+    )
+
+
+@mcp.tool(name="get_unix_timestamp",
+          description="Gets the current Unix timestamp as seconds since January 1, 1970 UTC (Epoch time).")
+def get_unix_timestamp() -> Annotated[
+    int, Field(description="Current time Unix timestamp as seconds since January 1, 1970 UTC (Epoch time).")]:
+    from datetime import datetime
+
+    return int(datetime.now().timestamp())
+
+
+# System information and status tools.
+
+@mcp.tool(name="get_system_info",
+          description="Gets system information, including system, node name, release, version, machine, processor, CPU count, memory total and swap total.")
+def get_system_info() -> Annotated[dict, Field(description="A dictionary containing system information.")]:
+    import platform
+    import psutil
+
+    pm = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+
+    system_info = {
+        "system": platform.system(),
+        "node_name": platform.node(),
+        "release": platform.release(),
+        "version": platform.version(),
+        "machine": platform.machine(),
+        "processor": platform.processor(),
+        "cpu_count": psutil.cpu_count(logical=True),
+        "memory_total": pm.total if pm else None,
+        "swap_total": swap.total if swap else None,
+    }
+
+    return system_info
+
+
+@mcp.tool(name="get_system_stats",
+          description="Gets system stats, including boot time, CPU count, CPU percent, memory percent, memory total, memory used, memory free, swap percent, swap total, swap used and swap free.")
+async def get_system_stats() -> Annotated[dict, Field(description="A dictionary containing system stats.")]:
+    import psutil
+
+    pm = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+
+    system_stats = {
+        "boot_time": psutil.boot_time(),
+        "cpu_count": psutil.cpu_count(logical=True),
+        "cpu_percent": psutil.cpu_percent(interval=1),
+        "memory_percent": pm.percent if pm else None,
+        "memory_total": pm.total if pm else None,
+        "memory_used": pm.used if pm else None,
+        "memory_free": pm.free if pm else None,
+        "swap_percent": swap.percent if swap else None,
+        "swap_total": swap.total if swap else None,
+        "swap_used": swap.used if swap else None,
+        "swap_free": swap.free if swap else None,
+    }
+
+    return system_stats
+
+
+# File system tools.
+
+@mcp.tool(name="read_lines",
+          description="Reads the content of a file and returns it as a list of strings in utf-8 encoding, with max bytes limit of 10MB.")
+async def read_lines(
+        file_path: Annotated[str, Field(description="File path to read lines, absolute or relative, required.")],
+        file_encoding: Annotated[
+            str, Field(description="File encoding to read lines, optional, defaults to utf-8.")] = "utf-8",
+        working_directory: Annotated[
+            str, Field(description="Working directory to use for relative file paths, optional, "
+                                   "defaults to current working directory.")
+        ] = os.getcwd(),
+        begin_line: Annotated[
+            int, Field(description="Beginning position to read from, optional, defaults to 1. "
+                                   "Negative values indicate reading from the N to last line, e.g. -1 means last line, -2 means second to last line, etc.")] = 1,
+        max_lines: Annotated[
+            int,
+            Field(description="Maximum number of lines to read, optional, defaults to None(no limit), max 10000.")
+        ] = None,
+) -> Annotated[ReadLinesResult, Field(description="Content lines of the file as a list of strings in utf-8 encoding.")]:
+    """Note:
+        In Python 3, str is Unicode. You should decode the file using the specified file_encoding and return the str.
+        The transport/JSON layer will UTF‑8 encode it as needed.
+
+    Raises:
+        ValueError: If the file does not exist or is not readable.
+    """
+
+    lines = await do_read_lines(file_path=file_path, file_encoding=file_encoding,
+                                working_directory=working_directory,
+                                begin_line=begin_line, max_lines=max_lines,
+                                strip_lf=True,
+                                )
+    file_path = os.path.expanduser(file_path)
+    file_path = os.path.join(working_directory, file_path.strip()) if not os.path.isabs(file_path.strip()) \
+        else file_path.strip()
+    file_path = os.path.normpath(file_path).replace(os.sep, "/")
+
+    return ReadLinesResult(lines=lines, read_lines=len(lines),
+                           file_path=file_path, begin_line=begin_line, max_lines=max_lines,
+                           )
+
+
+async def do_read_lines(file_path: str, file_encoding: str = "utf-8",
+                        working_directory: str = os.getcwd(),
+                        begin_line: int = 1, max_lines: int | None = None,
+                        strip_lf: bool = True,
+                        ) -> list[str]:
+    if not isinstance(file_path, str) or not file_path.strip():
+        log.error(f"File path must be a non-empty string, but got '{file_path}'")
+        raise ValueError("File path must be a non-empty string")
+    if not isinstance(file_encoding, str) or not file_encoding.strip():
+        log.error(f"File encoding must be a non-empty string, but got '{file_encoding}'")
+        raise ValueError("File encoding must be a non-empty string")
+    if not isinstance(working_directory, str) or not working_directory.strip():
+        log.error(f"Working directory must be a non-empty string, but got '{working_directory}'")
+        raise ValueError("Working directory must be a non-empty string")
+    if not isinstance(begin_line, int) or begin_line == 0:
+        log.error(f"Begin line must be a non-zero integer, but got '{begin_line}'")
+        raise ValueError("Begin line must be a non-zero integer")
+    if max_lines is not None and (not isinstance(max_lines, int) or max_lines < 1 or max_lines > 10000):
+        log.error(f"Max lines must be a positive integer between 1 and 10000, but got '{max_lines}'")
+        raise ValueError("Max lines must be a positive integer between 1 and 10000")
+
+    try:
+        max_size = 10 * 1024 * 1024  # 10MB in bytes
+        file_path = os.path.expanduser(file_path)
+        file_path = os.path.join(working_directory, file_path.strip()) if not os.path.isabs(file_path.strip()) \
+            else file_path.strip()
+        file_path = os.path.normpath(file_path).replace(os.sep, "/")
+
+        if not os.path.exists(file_path):
+            raise ValueError(f"File '{file_path}' does not exist or is not readable")
+
+        file_size = os.path.getsize(file_path)
+        log.debug(f"Reading file lines '{file_path}' with encoding '{file_encoding}', "
+                  f"begin line {begin_line}, max lines {max_lines}, file size {file_size} bytes")
+
+        with open(file_path, 'r', encoding=file_encoding) as f:
+            if begin_line < 0:
+                if max_lines is None:
+                    k = abs(begin_line)
+                    if k > 10000:
+                        total_lines = sum(1 for _ in f)
+                        f.seek(0)
+                        if total_lines > 10000:
+                            log.error("Cannot read more than 10000 lines from the end of the file")
+                            raise ValueError("Cannot read more than 10000 lines from the end of the file")
+
+                    from collections import deque
+                    tail = deque()
+                    total_bytes = 0
+                    for line in f:
+                        n_bytes = len(line.encode("utf-8"))
+                        if len(tail) == k:
+                            old_line = tail.popleft()
+                            total_bytes -= len(old_line.encode("utf-8"))
+                        tail.append(line)
+                        total_bytes += n_bytes
+                    # Validate final tail size (cannot safely early‑abort; size can decrease as lines roll off).
+                    if total_bytes > max_size:
+                        raise ValueError("Content exceeds maximum size limit of 10MB")
+                    lines = list(tail) if not strip_lf else [l.rstrip("\r\n").rstrip("\n") for l in list(tail)]
+                else:
+                    ## Two‑pass: compute start, then stream only the needed window and check incrementally.
+                    # total_lines = sum(1 for _ in f)
+                    # f.seek(0)
+
+                    # start_line = max(1, total_lines + begin_line + 1)
+                    # lines = []
+                    # total_bytes = 0
+                    # for line in islice(f, start_line - 1, start_line - 1 + max_lines):
+                    #    n_bytes = len(line.encode("utf-8"))
+                    #    total_bytes += n_bytes
+                    #    if total_bytes > max_size:
+                    #        raise ValueError("Content exceeds maximum size limit of 10MB")
+                    #    lines.append(line)
+                    from collections import deque  # add near the other local imports in this branch
+
+                    k = abs(begin_line)
+                    window = deque(maxlen=k + max_lines)
+
+                    # Single pass: keep only the last k + max_lines lines
+                    for line in f:
+                        window.append(line)
+
+                    # Compute slice within the window
+                    L = len(window)  # == min(total_lines, k + max_lines)
+                    start_idx = max(0, L - k)  # start of desired range in the window
+                    d = min(max_lines, k, L - start_idx)
+
+                    # Build result and enforce 10MB cap on returned content
+                    lines = []
+                    total_bytes = 0
+                    for line in list(window)[start_idx:start_idx + d]:
+                        n_bytes = len(line.encode("utf-8"))
+                        total_bytes += n_bytes
+                        if total_bytes > max_size:
+                            log.error("Content exceeds maximum size limit of 10MB")
+                            raise ValueError("Content exceeds maximum size limit of 10MB")
+                        lines.append(line if not strip_lf else line.rstrip("\r\n").rstrip("\n"))
+
+            else:
+                total_bytes = 0
+                if max_lines is None:
+                    lines = []
+                    for i, line in enumerate(f, 1):
+                        if i >= begin_line:
+                            n_bytes = len(line.encode("utf-8"))
+                            total_bytes += n_bytes
+                            if total_bytes > max_size:
+                                log.error("Content exceeds maximum size limit of 10MB")
+                                raise ValueError("Content exceeds maximum size limit of 10MB")
+                            lines.append(line if not strip_lf else line.rstrip("\n"))
+                            if len(lines) > 10000:
+                                log.error("Cannot read more than 10000 lines from the file")
+                                raise ValueError("Cannot read more than 10000 lines from the file")
+                else:
+                    from itertools import islice
+                    lines = []
+                    for line in islice(f, begin_line - 1, begin_line - 1 + max_lines):
+                        n_bytes = len(line.encode("utf-8"))
+                        total_bytes += n_bytes
+                        if total_bytes > max_size:
+                            raise ValueError("Content exceeds maximum size limit of 10MB")
+                        lines.append(line if not strip_lf else line.rstrip("\r\n").rstrip("\n"))
+
+            return lines
+
+    except ValueError as e:
+        # Re-raise ValueError as-is
+        raise e
+    except Exception as e:
+        import traceback
+        log.error(f"Error reading file '{file_path}': {e}\n{traceback.format_exc()}")
+        raise ValueError(f"Error reading file '{file_path}': {e}")
+
+
+@mcp.tool(name="read_files",
+          description="Reads all content of multiple files (non-binary) and returns a dictionary with file paths as keys and their content in utf-8 encoding as values, "
+                      "with a max size limit of 10MB per file.")
+async def read_files(
+        file_paths: Annotated[list[str], Field(description="File paths to read, absolute or relative, required.")],
+        file_encodings: Annotated[
+            list[str | None], Field(
+                description="File encodings to read, optional, empty or None to use utf-8 encoding for each file.")
+        ] = None,
+        skip_errors: Annotated[
+            bool, Field(description="Whether to skip errors when reading files, optional, defaults to True.")
+        ] = True,
+        working_directory: Annotated[
+            str, Field(
+                description="Working directory to use for relative file paths, optional, defaults to current working directory.")
+        ] = os.getcwd(),
+) -> Annotated[
+    dict, Field(
+        description="A dictionary containing file paths as keys and their content in utf-8 encoding as values, failure files are omitted if skip_errors is True.")]:
+    """Raises:
+        ValueError: If any file does not exist or is not readable, or if the file encoding is invalid and skip_errors is False.
+    """
+
+    # Validate inputs
+    if not isinstance(file_paths, list) or not file_paths:
+        log.error("File paths must be a non-empty list of strings")
+        raise ValueError("File paths must be a non-empty list of strings")
+    if not isinstance(skip_errors, bool):
+        log.error("skip_errors must be a boolean")
+        raise ValueError("skip_errors must be a boolean")
+    if not isinstance(working_directory, str) or not working_directory.strip():
+        log.error("Working directory must be a non-empty string")
+        raise ValueError("Working directory must be a non-empty string")
+
+    # Normalize and validate each file path; keep original and resolved path
+    normalized_paths: list[tuple[str, str]] = []
+    for p in file_paths:
+        if not isinstance(p, str) or not p.strip():
+            log.error(f"File path must be a non-empty string, but got '{p}'")
+            raise ValueError("File paths must be a non-empty list of strings")
+        sp = p.strip()
+        resolved = os.path.join(working_directory, sp) if not os.path.isabs(sp) else sp
+        # # Normalize, then force forward slashes on all OSes
+        resolved = os.path.expanduser(resolved)
+        resolved = os.path.normpath(resolved).replace(os.sep, "/")
+        normalized_paths.append((p, resolved))
+
+    # Align encodings with paths; default to utf-8 when missing/empty
+    encs: list[str | None]
+    if not isinstance(file_encodings, list) or len(file_encodings) == 0:
+        encs = [None] * len(file_paths)
+    else:
+        encs = []
+        for i in range(len(file_paths)):
+            enc = file_encodings[i] if i < len(file_encodings) else None
+            if enc is not None and not isinstance(enc, str):
+                if skip_errors:
+                    log.error(f"Invalid file encoding for '{file_paths[i]}', defaulting to utf-8")
+                    enc = None
+                else:
+                    raise ValueError(f"Invalid file encoding value for '{file_paths[i]}'")
+            encs.append(enc)
+
+    results: dict[str, str] = {}
+
+    # Read each file using the existing read_file to enforce UTF-8 payload size limit
+    for (orig_path, resolved_path), enc in zip(normalized_paths, encs):
+        try:
+            encoding_to_use = 'utf-8' if enc is None or (isinstance(enc, str) and not enc.strip()) else enc.strip()
+            lines = await do_read_lines(file_path=orig_path, file_encoding=encoding_to_use,
+                                        working_directory=working_directory,
+                                        begin_line=1, max_lines=None,
+                                        strip_lf=False,
+                                        )
+
+            results[resolved_path] = "".join(lines)
+        except Exception as e:
+            if skip_errors:
+                log.error(f"Skipping file '{resolved_path}': {e}")
+                continue
+            raise ValueError(f"Error reading file '{resolved_path}': {e}")
+
+    return results
+
+
+# Network tools.
+
+@mcp.tool(name="check_connectivity",
+          description="Checks connectivity to a destination using curl command with optional timeout and proxy options. Results are descriptions of the connectivity status.")
+async def check_connectivity(
+        destination: Annotated[
+            str,
+            Field(description="Destination to check connectivity to, required, can be a hostname, IP address, or URL.")
+        ],
+        timeout: Annotated[
+            float,
+            Field(description="Timeout for the curl command in seconds, optional, defaults to 15 seconds.")
+        ] = 15.0,
+        proxy_enabled: Annotated[
+            bool,
+            Field(description="Whether to enable the proxy settings, optional, defaults to False.")
+        ] = True,
+        proxy: Annotated[
+            str,
+            Field(description="Proxy server to use, optional, defaults to system proxy settings.")
+        ] = None,
+        proxy_username: Annotated[
+            str,
+            Field(description="Username for the proxy server, optional, defaults to system proxy settings.")
+        ] = None,
+        proxy_password: Annotated[
+            str,
+            Field(description="Password for the proxy server, optional, defaults to system proxy settings.")
+        ] = None,
+) -> Annotated[str, Field(description="Description of the connectivity status.")]:
+    """Checks connectivity to a destination using curl command.
+
+    Raises:
+        ValueError: If the destination is invalid.
+    """
+
+    if not destination or not isinstance(destination, str) or not destination.strip():
+        log.error("Destination must be a non-empty DNS name or IP address")
+        raise ValueError("Destination must be a non-empty DNS name or IP address")
+
+    cmd = ["curl", "--head", "--connect-timeout", str(timeout)]
+
+    if proxy_enabled:
+        if proxy and isinstance(proxy, str) and proxy.strip():
+            cmd += ["--proxy", proxy]
+        if proxy_username and isinstance(proxy_username, str) and proxy_username.strip():
+            proxy_user = proxy_username if proxy_password is None \
+                                           or not isinstance(proxy_password, str) or not proxy_password.strip() \
+                else f"{proxy_username}:{proxy_password}"
+            cmd += ["--proxy-user", proxy_user]
+    else:
+        # Parse the destination to extract the host
+        import re
+
+        if re.match(r'^\w+://', destination):
+            from urllib.parse import urlparse
+            parsed_url = urlparse(destination)
+            host = parsed_url.netloc
+        else:
+            host = destination.strip()
+
+        if host.count(':') > 0:
+            host = host.split(':')[0]
+
+        cmd += ["--noproxy", host]
+
+    cmd += ["--insecure", "--proxy-insecure"]
+
+    cmd.append(destination)
+
+    import subprocess
+    from subprocess import TimeoutExpired
+
+    try:
+        log.debug(f"Checking connectivity to {destination}: {' '.join(cmd)}...")
+
+        completed = subprocess.run(
+            cmd,
+            timeout=timeout + 1.0,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,  # decode bytes to str using locale encoding
+            check=False
+        )
+
+        error = completed.stderr.strip() if completed.stderr else None
+        if completed.returncode in (7, 28):
+            log.error(f"Error checking connectivity to {destination} (code {completed.returncode}): "
+                      f"{error if error else 'No error message'}")
+            raise RuntimeError(f"Error checking connectivity to {destination} (code {completed.returncode}):\n"
+                               f"{error if error else 'No error message'}")
+
+        result = completed.stdout.strip() if completed.stdout else None
+
+        return (
+            f"Connectivity to {destination} is successful:\n"
+            f"{result if result else 'No result from curl command'}"
+            f"{'\n' + error if error else 'No error message'}"
+        )
+
+    except FileNotFoundError as e:
+        log.error(f"Curl command not found on this system: {e}")
+        raise FileNotFoundError(f"Curl command not found on this system: {e}")
+    except TimeoutExpired as e:
+        log.error(f"Connection to {destination} timed out after {timeout} seconds: {e}")
+        raise TimeoutError(f"Connection to {destination} timed out after {timeout} seconds")
+
+
+@mcp.tool(name="ping",
+          description="Pings a DNS name or IP address with the optional timeout and count. Results are details of the ping command.")
+async def ping(destination: Annotated[str, Field(description="DNS name or IP address to ping, required.")],
+               timeout: Annotated[float, Field(description="Timeout for the ping in seconds, optional, "
+                                                           "defaults to 15 seconds.")] = 15.0,
+               count: Annotated[int, Field(description="Number of pings to send, optional, defaults to 3.")] = 3,
+               ) -> Annotated[str, Field(description="Details of the ping command.")]:
+    """Ping a DNS name or IP address with the optional timeout and count.
+
+    Raises:
+        ValueError: If the destination, timeout or count is invalid.
+    """
+
+    # Check destination
+    if not destination or not isinstance(destination, str) or not destination.strip():
+        log.error("Destination must be a non-empty DNS name or IP address")
+        raise ValueError("Destination must be a non-empty DNS name or IP address")
+    destination = destination.strip()
+    # Check timeout
+    if not isinstance(timeout, (int, float)) or timeout <= 0 or timeout > 120:
+        log.error("Timeout must be a positive number between 0 and 120 seconds")
+        raise ValueError("Timeout must be a positive number between 0 and 120 seconds")
+    # Check count
+    if not isinstance(count, int) or count < 1 or count > 100:
+        log.error("Count must be a positive integer between 1 and 100")
+        raise ValueError("Count must be a positive integer between 1 and 100")
+
+    import platform
+    import subprocess
+    from subprocess import TimeoutExpired
+
+    # Determine the ping command based on the operating system
+    # Windows uses '-n', Linux/macOS uses '-c'
+    # Linux/macOS uses '-W' for timeout (in seconds), '-w' flag for deadline, Windows uses '-w' (milliseconds)
+    system = platform.system().lower()
+    timeout_flag = '-w'
+    if system == 'windows':
+        param_count = '-n'
+        # Convert seconds to milliseconds for Windows
+        timeout *= 1000
+    else:
+        param_count = '-c'
+
+    cmd = ['ping', param_count, str(count)]
+    cmd += [timeout_flag, str(int(timeout))]
+    cmd.append(destination)
+
+    try:
+        log.debug(f"Pinging {destination}: {' '.join(cmd)}...")
+
+        completed = subprocess.run(
+            cmd,
+            timeout=timeout + 1.0,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,  # decode bytes to str using locale encoding
+            check=False
+        )
+
+        # Check if the ping command was successful
+        if completed.returncode != 0:
+            log.error(f"Error pinging {destination} (code {completed.returncode}): "
+                      f"{completed.stderr.strip() if completed.stderr else 'No error message'}")
+            raise RuntimeError(f"Error pinging {destination} (code {completed.returncode}):\n"
+                               f"{completed.stderr.strip() if completed.stderr else 'No error message'}")
+
+        result = completed.stdout.strip() if completed.stdout else None
+        if not result:
+            log.error(f"No result from ping command for {destination}")
+            raise RuntimeError(f"No result from ping command for {destination}")
+
+        return result
+
+    except FileNotFoundError as e:
+        log.error(f"Ping command not found on this system: {e}")
+        raise FileNotFoundError(f"Ping command not found on this system: {e}")
+    except TimeoutExpired as e:
+        log.error(f"Ping to {destination} timed out after {timeout} seconds: {e}")
+        raise TimeoutError(f"Ping to {destination} timed out after {timeout} seconds")
+
+
+# Other tools.
+
+@mcp.tool(name="evaluate", description="Evaluates the given numeric expression with the given variables if any.")
+def evaluate(
+        expression: Annotated[str, Field(description="Numeric expression to evaluate, required.")],
+        variables: Annotated[dict, Field(description="Variables to use in the expression, if any, optional.")] = None,
+) -> Annotated[float, Field(description="Result of the evaluation.")]:
+    """Evaluates the given numeric expression with the given variables if any.
+
+    Raises:
+        ValueError: If the expression is invalid, or if there are any issues with the evaluation.
+    """
+
+    if not isinstance(expression, str):
+        log.error("Expression must be a string")
+        raise ValueError("Expression must be a string")
+
+    if variables is not None and not isinstance(variables, dict):
+        log.error("Variables must be a dictionary")
+        raise ValueError("Variables must be a dictionary")
+
+    # Evaluate the expression using numexpr
+    try:
+        import numexpr as ne
+
+        result = ne.evaluate(expression, local_dict=variables)
+    except Exception as e:
+        import traceback
+        log.error(f"Error evaluating expression '{expression}' with variables {variables}:\n{traceback.format_exc()}")
+        raise ValueError(f"Error evaluating expression: {e}")
+
+    return float(result)
+
+
+@mcp.tool(name="generate_uuid",
+          description="Generates one or multiple UUIDs with the specified version, defaults to one UUID of version 4 (random).")
+def generate_uuid(
+        count: Annotated[int, Field(description="Number of UUIDs to generate, optional, defaults to 1.")] = 1,
+        version: Annotated[
+            int, Field(description="UUID version (1, 3, 4, or 5), optional, defaults to 4 (random).")] = 4,
+        namespace: Annotated[str, Field(description="Namespace UUID (required for versions 3 and 5). "
+                                                    "Must be a valid UUID string or one of the predefined namespaces: 'dns', 'url', 'oid', 'x500'.")] = None,
+        name: Annotated[str, Field(description="Name string (required for versions 3 and 5).")] = None,
+) -> Annotated[GenerateUUIDResult, Field(description="List of UUID strings.")]:
+    """Generates one or multiple UUIDs with the specified version, defaults to one UUID of version 4 (random).
+
+    Raises:
+        ValueError: If the count is not a positive integer or if the version is not 1, 3, 4, or 5 or if the namespace or name is not provided for versions 3 and 5.
+    """
+
+    if not isinstance(count, int) or count < 1 or count > 1000:
+        log.error("Count must be a positive integer between 1 and 1000")
+        raise ValueError("Count must be a positive integer between 1 and 1000")
+
+    import uuid
+
+    if not isinstance(version, int) or version not in [1, 3, 4, 5]:
+        log.error("UUID version must be an integer of 1, 3, 4, or 5")
+        raise ValueError("UUID version must be an integer of 1, 3, 4, or 5")
+
+    if version in [3, 5]:
+        if namespace is None or name is None:
+            log.error(f"Version {version} requires both namespace and name parameters")
+            raise ValueError(f"Version {version} requires both namespace and name parameters")
+        if not isinstance(namespace, str):
+            namespace = str(namespace)
+        if not isinstance(name, str):
+            name = str(name)
+
+        # Predefined namespace UUIDs
+        predefined_namespaces = {
+            "dns": uuid.NAMESPACE_DNS,
+            "url": uuid.NAMESPACE_URL,
+            "oid": uuid.NAMESPACE_OID,
+            "x500": uuid.NAMESPACE_X500
+        }
+
+        # Check namespace
+        if namespace not in predefined_namespaces:
+            try:
+                if namespace.startswith("urn:uuid:"):
+                    namespace = namespace[9:]
+                namespace = uuid.UUID(namespace)
+            except ValueError:
+                log.error("Invalid namespace UUID string, must be a valid UUID string or one of the predefined "
+                          "namespaces: 'dns', 'url', 'oid', 'x500'")
+                raise ValueError("Invalid namespace UUID string, must be a valid UUID string or one of the predefined "
+                                 "namespaces: 'dns', 'url', 'oid', 'x500'")
+        else:
+            # Use the predefined namespace UUID
+            namespace = predefined_namespaces[namespace]
+
+    # Note, for UUID versions 3 and 5, the same namespace and name will always generate the same UUID.
+    # This is expected behavior because these versions create deterministic UUIDs based on hashing the inputs.
+
+    uuids = []
+    for i in range(count):
+        match version:
+            case 1:
+                # Time-based
+                u = uuid.uuid1()
+            case 3:
+                # MD5 hash-based
+                # Add iteration number to name to make each UUID unique
+                modified_name = f"{name}_{i}" if count > 1 else name
+                u = uuid.uuid3(namespace, modified_name)
+            case 4:
+                # Random
+                u = uuid.uuid4()
+            case 5:
+                # SHA-1 hash-based
+                # Add iteration number to name to make each UUID unique
+                modified_name = f"{name}_{i}" if count > 1 else name
+                u = uuid.uuid5(namespace, modified_name)
+
+            case _:
+                log.error("UUID version must be 1, 3, 4, or 5")
+                raise ValueError("UUID version must be 1, 3, 4, or 5")
+
+        uuids.append(str(u))
+
+    return GenerateUUIDResult(uuids=uuids)
+
+
+@mcp.tool(name="sleep", description="Sleeps for a specified amount of time.")
+async def sleep(
+        time_value: Annotated[
+            float,
+            Field(description="Time value to sleep for, in 'time_unit' units, required.")
+        ],
+        time_unit: Annotated[
+            str,
+            Field(description="Time unit to sleep for, optional, defaults to seconds. "
+                              "Can be microseconds, milliseconds, seconds, minutes, hours, days or weeks.")] = "seconds",
+) -> Annotated[str, Field(description="A message indicating that the server has slept for the specified duration.")]:
+    """Sleeps for a specified amount of time.
+
+    Raises:
+        ValueError: If time_value is not positive or if an invalid time unit is provided.
+    """
+
+    conversion_factors = {
+        "microseconds": 0.000001,
+        "milliseconds": 0.001,
+        "seconds": 1,
+        "minutes": 60,
+        "hours": 3600,
+        "days": 86400,
+        "weeks": 604800,
+    }
+
+    if time_value <= 0:
+        log.error("Sleep duration must be a positive number")
+        raise ValueError("Sleep duration must be a positive number")
+
+    if time_unit not in conversion_factors:
+        valid_units = ", ".join(f'"{unit}"' for unit in conversion_factors.keys())
+        log.error(f"Invalid time unit: {time_unit}. Please use one of: {valid_units}")
+        raise ValueError(f"Invalid time unit. Please use one of: {valid_units}")
+
+    sleep_duration_seconds = time_value * conversion_factors[time_unit]
+
+    start_time = time.perf_counter()
+    time.sleep(sleep_duration_seconds)
+    end_time = time.perf_counter()
+    elapsed = end_time - start_time
+
+    sys.stderr.write(f"Actual sleep time: {elapsed:.6f} seconds.\n")
+    return f"Server slept for {time_value} {time_unit}."
+
+
+def serve(transport: str | None = None,
+          host: str | None = None, port: int | None = None,
+          log_level: str | None = None,
+          ) -> None:
+    """Start the MCP server with the specified transport.
+
+    Args:
+        transport: (str | None): Transport to use, optional. Defaults to stdio. If UTILITIES_BOX_TRANSPORT environment variable is set, it will be used.
+        host: (str | None):      Host to bind to(sse transport only), optional. Defaults to 0.0.0.0. If UTILITIES_BOX_HOST environment variable is set, it will be used.
+        port: (int | None):      Port to bind to(sse transport only), optional. Defaults to 41104. If UTILITIES_BOX_PORT environment variable is set, it will be used.
+        log_level: (str | None): Log level to use(sse transport only), optional. Defaults to INFO. If UTILITIES_BOX_LOG_LEVEL environment variable is set, it will be used.
+
+    Raises:
+        ValueError: If the transport is not 'stdio' or 'sse'.
+    """
+
+    import os
+
+    if transport is None or not transport:
+        transport = os.getenv("UTILITIES_BOX_TRANSPORT", "stdio")
+
+    if transport:
+        if not isinstance(transport, str) or transport.strip() not in ["stdio", "sse"]:
+            log.error(f"Invalid transport: {transport}, must be 'stdio' or 'sse'.")
+            raise ValueError(f"Invalid transport: {transport}, must be 'stdio' or 'sse'")
+        transport = transport.strip()
+
+    if transport and transport == 'sse':
+        mcp.settings.host = os.getenv("UTILITIES_BOX_HOST", "0.0.0.0") if host is None or not host else host
+        mcp.settings.port = int(os.getenv("UTILITIES_BOX_PORT", "41104")) if port is None or port < 1 else port
+        mcp.settings.log_level = os.getenv("UTILITIES_BOX_LOG_LEVEL", "INFO") if log_level is None or not log_level \
+            else log_level
+        stderr.write(
+            f"Starting MCP server on {mcp.settings.host}:{mcp.settings.port} using SSE transport, log level: {mcp.settings.log_level}.\n")
+
+        mcp.run(transport='sse')
+    else:
+        stderr.write(f"Starting MCP server using stdio transport.\n")
+
+        import os
+
+        if os.getenv("SIMP_LOGGER_LOG_CONSOLE_ENABLED", "True").lower() != "false":
+            log.error("SIMP_LOGGER_LOG_CONSOLE_ENABLED must be set to False to use stdio transport.")
+            raise ValueError("SIMP_LOGGER_LOG_CONSOLE_ENABLED must be set to False to use stdio transport")
+
+        mcp.run(transport='stdio')

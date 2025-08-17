@@ -1,178 +1,220 @@
 #!/usr/bin/env bash
-#set -x
+# set -x
 
 orig_dir=$(pwd)
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)
-script_dirname=$(basename "$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)")
+script_dir="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_dirname="$(basename "$script_dir")"
+package="$script_dirname"                   # Package name defaults to directory name
+PYTHON_BIN="${PYTHON_BIN:-python}"          # Can be overridden via environment variable
+VENV_DIR="${VENV_DIR:-$script_dir/.venv}"   # Project-local venv directory
 
-package=$script_dirname
+log() { printf '[%s] %s\n' "$(date +'%F %T')" "$*"; }
+err() { printf '[%s] ERROR: %s\n' "$(date +'%F %T')" "$*" 1>&2; }
+die() { err "$*"; exit 1; }
+
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+ensure_py() {
+  if ! have_cmd "$PYTHON_BIN"; then
+    die "Python not found: $PYTHON_BIN"
+  fi
+}
+
+# Usage: run_or_die "desc" cmd arg...
+run_or_die() {
+  local desc="$1"; shift
+  log "$desc"
+  "$@"
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    die "Failed: ${desc} (exit=$rc)"
+  fi
+}
 
 stop() {
-  # Check if running on Windows (OSTYPE can be "msys", "cygwin", or "win32")
-  if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* || "$OSTYPE" == "win32"* ]]; then
-    kill_bat="$script_dir"/kill.bat
-    if [ -f "$kill_bat" ]; then
-      # Call kill.bat using Windows command prompt
-      "$kill_bat" -q
+  # Windows (Git Bash / MSYS / Cygwin)
+  if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || "${OSTYPE:-}" == win32* ]]; then
+    local killall_script="$script_dir/killall.cmd"
+    if [[ -f "$killall_script" ]]; then
+      "$killall_script" "$package.exe" || log "killall.cmd returned non-zero (ignored)."
     else
-      echo "kill.bat not found in the script directory => skipping kill.bat execution"
+      log "killall.cmd not found; skipping Windows process kill."
     fi
   else
-    killall "$package"
+    if have_cmd killall; then
+      killall "$package" 2>/dev/null || true
+    else
+      pkill -x "$package" 2>/dev/null || pkill -f "$package" 2>/dev/null || true
+    fi
   fi
 }
 
-# Function to purge temporary and build files
+# Purge build/venv/temp
 purge() {
-  rm -rf $(find . -name build)
-  rm -rf $(find . -name .venv)
-  rm -rf $(find . -name uv.lock)
-  rm -rf $(find . -name __pycache__)
-  rm -rf $(find . -name .pytest_cache)
-  rm -rf $(find . -name dist)
-  rm -rf $(find . -name "*.egg-info")
-  rm -rf $(find . -name _version.py)
-  echo "Purge completed."
+  cd "$script_dir" || die "cd $script_dir failed"
+  log "Purging temp/build files..."
+
+  # Directories
+  for d in \
+    ".venv" "build" "dist" \
+    "__pycache__" ".pytest_cache" ".mypy_cache" ".ruff_cache" ".tox" \
+    "htmlcov" ".benchmarks" ".ipynb_checkpoints"
+  do
+    find . -name "$d" -type d -print0 2>/dev/null | xargs -0r rm -rf -- || err "rm $d failed (ignored)"
+  done
+
+  # Files
+  find . -name "uv.lock"     -print0 2>/dev/null | xargs -0r rm -f -- || err "rm uv.lock failed (ignored)"
+  find . -name "_version.py" -print0 2>/dev/null | xargs -0r rm -f -- || err "rm _version.py failed (ignored)"
+  find . -name "*.egg-info"  -type d -print0 2>/dev/null | xargs -0r rm -rf -- || err "rm *.egg-info failed (ignored)"
+  find . -name "*.py[co]"    -print0 2>/dev/null | xargs -0r rm -f -- || err "rm *.py[co] failed (ignored)"
+  find . -name ".coverage"   -print0 2>/dev/null | xargs -0r rm -f -- || err "rm .coverage failed (ignored)"
+  find . -name "coverage.xml" -print0 2>/dev/null | xargs -0r rm -f -- || err "rm coverage.xml failed (ignored)"
+
+  log "Purge completed."
+  cd "$orig_dir" || die "cd back failed"
 }
 
-# Functions to run pytest
-on_test_failure() {
-  echo "Error: $1" 1>&2
-  cd "$script_dir"
-  purge
-  cd "$orig_dir"
-  exit 1
-}
+ensure_venv() {
+  local dir="$1"
+  ensure_py
 
-run_test() {
-  cd "$script_dir" || exit 1
-
-  echo purge
-  purge
-
-  echo "pytest --maxfail=1 -s"
-  pytest --maxfail=1 -s || on_test_failure "Tests failed"
-
-  echo purge
-  purge
-
-  echo "Tested successfully."
-}
-
-# Functions to reinstall all pyproject.toml packages
-on_reinstall_failure() {
-  local error="$1"
-
-  echo "Error: $error" 1>&2
-
-  pip uninstall "$package" --yes
-
-  cd "$script_dir"
-  purge
-  cd "$orig_dir"
-  exit 1
-}
-
-reinstall() {
-  read -p "Reinstall $package? (y/N): " -r confirm
-  if [[ "$confirm" != [yY] ]]; then
-    echo "Operation cancelled."
-    exit 1
+  if [[ ! -x "$dir/bin/python" ]]; then
+    log "Creating venv at: $dir"
+    "$PYTHON_BIN" -m venv "$dir"
+    local rc=$?
+    [[ $rc -eq 0 ]] || die "python -m venv failed (exit=$rc)"
   fi
 
+  activate_script=
+  if [[ -e "$dir/bin/activate" ]]; then
+    activate_script="$dir/bin/activate"
+  elif [[ -e "$dir/Scripts/activate" ]]; then
+    activate_script="$dir/Scripts/activate"
+  else
+    die "Failed to find activate script in $dir"
+  fi
+
+  . "$activate_script"
+  if [[ $? -ne 0 ]]; then
+    die "Failed to activate venv at: $dir"
+  fi
+}
+
+cmd_test() {
+  cd "$script_dir" || die "Failed to change directory to $script_dir"
+  ensure_venv "$VENV_DIR"
+
+  if command -v uv >/dev/null 2>&1; then
+    uv sync --no-install-project --extra test || die "Failed to sync uv dependencies"
+  else
+    die "uv not found"
+  fi
+
+  python -m pytest --maxfail=1 -s "$@"
+  local rc=$?
+  cd "$orig_dir" || true
+  [[ $rc -eq 0 ]] || die "Failed to run tests (exit=$rc)"
+  log "Tests passed."
+}
+
+cmd_reinstall_system() {
+  cd "$script_dir" || die "Failed to change directory to $script_dir"
+  ensure_py
   stop
-  purge
 
-  pip uninstall --yes "$package" || on_reinstall_failure "$package" "Uninstall $package failed"
-  pip install --no-cache-dir --upgrade . || on_reinstall_failure "$package" "Install $package failed"
+  log "Reinstalling $package into SYSTEM environment..."
+  "$PYTHON_BIN" -m pip uninstall -y "$package" || log "Uninstall returned non-zero (ignored)."
+  log "pip install --upgrade . $*"
+  "$PYTHON_BIN" -m pip install --upgrade . "$@"
+  local rc=$?
 
-  purge
-
-  pip show "$package"
-
-  pytest --maxfail=1 -s || on_reinstall_failure "$package" "Tests $package failed"
-  purge
-
-  pip show -v "$package"
-  echo "Reinstalled $package successfully."
+  cd "$orig_dir" || true
+  [[ $rc -eq 0 ]] || die "Failed to install (system) (exit=$rc)"
+  log "Reinstalled (system) successfully."
 }
 
-on_upload_failure() {
-  local error="$1"
+cmd_reinstall_venv() {
+  cd "$script_dir" || die "Failed to change directory to $script_dir"
+  stop
+  ensure_venv "$VENV_DIR"
 
-  echo "Error: $error" 1>&2
+  python -m pip install -U pip
+  [[ $? -eq 0 ]] || die "Failed to upgrade pip (ignored)."
 
-  cd "$script_dir"
-  purge
-  cd "$orig_dir"
-  exit 1
+  python -m pip uninstall -y "$package" || log "Uninstall returned non-zero (ignored)."
+  log "python -m pip install --upgrade . $*"
+  python -m pip install --upgrade . "$@"
+  local rc=$?
+
+  cd "$orig_dir" || true
+  [[ $rc -eq 0 ]] || die "Failed to install (venv) (exit=$rc)"
+  log "Reinstalled (venv) successfully."
 }
 
-upload() {
-  local repository="$1"
-
-  if [ -z "$repository" ]; then
-    echo "Usage: $(basename "$0") upload <repository>"
-    exit 1
+cmd_upload() {
+  local repository="${1:-}"
+  shift || true
+  if [[ -z "$repository" ]]; then
+    die "Usage: $(basename "$0") upload <repository> [pip-args...]"
   fi
 
-  cd "$script_dir" || exit 1
-  purge
+  cd "$script_dir" || die "Failed to change directory to $script_dir"
+  ensure_venv "$VENV_DIR"
 
-  echo "Building $package..."
-  python -m build --sdist --wheel . || on_upload_failure "Build $package failed"
+  log "Preparing build tooling..."
+  # Allow caller to add/override packages or versions after the default list.
+  # Example: ./pytools.sh upload pypi 'build==1.2.2' 'twine==5.0.0'
+  python -m pip install -U build twine "$@"
+  local rc=$?
+  [[ $rc -eq 0 ]] || die "Failed to install build/twine (exit=$rc)"
 
-  echo "Uploading $package to $repository..."
-  twine upload --repository "$repository" dist/* || on_upload_failure "Upload $package to $repository failed"
-  purge
+  run_or_die "Building $package..." python -m build --sdist --wheel .
+  run_or_die "Uploading to repository: $repository" python -m twine upload --repository "$repository" dist/*
 
-  echo "Uploaded $package to $repository successfully."
+  cd "$orig_dir" || die "Failed to change directory to $orig_dir"
+  log "Uploaded $package to $repository successfully."
 }
 
 show_help() {
-  echo "Usage: $(basename "$0") [COMMAND]"
-  echo ""
-  echo "Commands:"
-  echo "  test                                Run pytest tests for current package"
-  echo "  purge                               Remove temporary and build files"
-  echo "  reinstall                           Reinstall current package"
-  echo "  upload [repository]                 Package and upload current package to specified repository"
-  echo "  help, -h, --help                    Show this help message"
-  echo ""
+  cat <<EOF
+Usage: $(basename "$0") <command> [args...]
+
+Commands:
+  test [pytest-args...]             Always run pytest in project .venv (auto-create). If pytest missing, auto-install.
+  purge                             Remove temp/build files (.venv, build, dist, caches, *.egg-info, _version.py)
+  reinstall-system [pip-args...]    Reinstall into SYSTEM Python. Pass extra args to 'pip install'. No purge.
+                                    Examples:
+                                      $(basename "$0") reinstall-system --break-system-packages
+  reinstall-venv [pip-args...]      Reinstall into project .venv (auto-create). Pass extra args to 'pip install'. No purge.
+                                    Examples:
+                                      $(basename "$0") reinstall-venv
+  upload <repository> [pip-args...] Build (sdist+wheel) and upload via twine to the named repository (e.g. pypi, testpypi).
+                                    Pass extra args to 'pip install' after the default list.
+                                    Examples:
+                                      $(basename "$0") upload pypi
+
+  help, -h, --help                  Show this help message
+
+Env vars:
+  PYTHON_BIN   Python command to use (default: python)
+  VENV_DIR     Virtualenv path (default: \$script_dir/.venv)
+EOF
 }
 
-if [ $# -eq 0 ]; then
+cmd="${1:-}"
+if [[ -z "$cmd" ]]; then
   show_help
   exit 1
 fi
+shift || true
 
-case "$1" in
-  test)
-    run_test
-    ;;
-  purge)
-    purge
-    ;;
-  reinstall)
-    reinstall
-    ;;
-  upload)
-    shift
-    if [ $# -ne 1 ]; then
-      echo "Usage: $(basename "$0") upload <repository>"
-      show_help
-      exit 1
-    fi
-    upload "$1"
-    ;;
-
-  help|-h|--help)
-    show_help
-    exit 1
-    ;;
-  *)
-    echo "Unknown command: $1"
-    show_help
-    exit 1
-    ;;
+case "$cmd" in
+  test)               cmd_test "$@" ;;
+  purge)              purge ;;
+  reinstall-system)   cmd_reinstall_system "$@" ;;
+  reinstall-venv)     cmd_reinstall_venv "$@" ;;
+  upload)             cmd_upload "$@" ;;
+  help|-h|--help)     show_help ;;
+  *)                  err "Unknown command: $cmd"; show_help; exit 1 ;;
 esac
